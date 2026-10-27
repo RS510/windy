@@ -14,8 +14,8 @@ function key(source: GridSource, model: ModelId, spec: string): string {
 }
 
 /** Loads a grid for the bounds, deduplicating requests and caching results. */
-export function loadGrid(source: GridSource, bounds: Bounds, model: ModelId, targetPoints: number): Promise<Grid> {
-  const spec = makeGridSpec(bounds, targetPoints);
+export function loadGrid(source: GridSource, bounds: Bounds, model: ModelId, targetPoints: number, maxPoints = 220): Promise<Grid> {
+  const spec = makeGridSpec(bounds, targetPoints, maxPoints);
   const k = key(source, model, specKey(spec));
   let p = cache.get(k);
   if (p) {

@@ -93,14 +93,15 @@ export function openSpotEditor(loc: Location, spot?: Spot): void {
   closePanels('#panel-spot');
   clear(el);
   const u = state.units.wind;
-  const shown = (ms: number) => (u === 'bft' ? convertWind(ms, u) : Math.round(convertWind(ms, u) * 10) / 10);
+  // Whole numbers except m/s, so defaults like 14 m/s read "50" km/h rather than "50.4".
+  const shown = (ms: number) => (u === 'ms' ? Math.round(ms * 10) / 10 : Math.round(convertWind(ms, u)));
   // Max is stored as the upper bound of the chosen Beaufort force; show that force again.
   const shownMax = (ms: number) => (u === 'bft' ? convertWind(Math.max(0, ms - 0.01), u) : shown(ms));
   let sport: Sport = spot?.sport ?? 'kite';
   const dirs = new Set<number>(spot?.directions ?? []);
-  const name = h('input', { type: 'text', value: spot?.name ?? loc.name ?? '', maxlength: 60, 'data-testid': 'spot-name', required: true }) as HTMLInputElement;
-  const min = h('input', { type: 'number', min: 0, step: u === 'ms' ? 0.5 : 1, value: shown(spot?.minWind ?? SPORT_DEFAULTS[sport][0]), 'data-testid': 'spot-min', inputmode: 'decimal' }) as HTMLInputElement;
-  const max = h('input', { type: 'number', min: 0, step: u === 'ms' ? 0.5 : 1, value: shownMax(spot?.maxWind ?? SPORT_DEFAULTS[sport][1]), 'data-testid': 'spot-max', inputmode: 'decimal' }) as HTMLInputElement;
+  const name = h('input', { type: 'text', value: spot?.name ?? loc.name ?? '', maxlength: 60, 'data-testid': 'spot-name' }) as HTMLInputElement;
+  const min = h('input', { type: 'text', value: String(shown(spot?.minWind ?? SPORT_DEFAULTS[sport][0])).replace('.', ','), 'data-testid': 'spot-min', inputmode: 'decimal' }) as HTMLInputElement;
+  const max = h('input', { type: 'text', value: String(shownMax(spot?.maxWind ?? SPORT_DEFAULTS[sport][1])).replace('.', ','), 'data-testid': 'spot-max', inputmode: 'decimal' }) as HTMLInputElement;
   const error = h('div', { style: 'color:#ff9b8a;margin-top:8px', 'data-testid': 'spot-error' });
 
   const sportSeg = h('div', { class: 'seg' });
@@ -115,8 +116,8 @@ export function openSpotEditor(loc: Location, spot?: Spot): void {
           onclick: () => {
             sport = sp;
             if (!spot) {
-              min.value = String(shown(SPORT_DEFAULTS[sp][0]));
-              max.value = String(shownMax(SPORT_DEFAULTS[sp][1]));
+              min.value = String(shown(SPORT_DEFAULTS[sp][0])).replace('.', ',');
+              max.value = String(shownMax(SPORT_DEFAULTS[sp][1])).replace('.', ',');
             }
             renderSport();
           },
@@ -172,7 +173,7 @@ export function openSpotEditor(loc: Location, spot?: Spot): void {
     head(spot ? 'Spot bearbeiten' : 'Neuer Spot', () => setOpen(el, false)),
     h(
       'form',
-      { class: 'panel-body form', onsubmit: saveSpot, 'data-testid': 'spot-form' },
+      { class: 'panel-body form', onsubmit: saveSpot, novalidate: true, 'data-testid': 'spot-form' },
       h('div', { class: 'sub', style: 'color:var(--muted)' }, `${(spot ?? loc).lat.toFixed(3)}, ${(spot ?? loc).lon.toFixed(3)}`),
       h('label', {}, 'Name'),
       name,

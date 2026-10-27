@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { canvasStats, openApp, selectLayer, waitForData } from './helpers';
+import { canvasStats, openApp, selectLayer, setLayers, setView, toggleLayer, waitForData } from './helpers';
 
 test.describe('Karte, Layer und Zeitleiste', () => {
   test('lädt Gitterdaten, zeichnet Farbfeld und animiert Windpartikel', async ({ page }) => {
@@ -48,6 +48,7 @@ test.describe('Karte, Layer und Zeitleiste', () => {
       requests.length = 0;
       await selectLayer(page, id);
       await waitForData(page);
+      await expect(page.locator('#legend .legend-item')).toHaveCount(1);
       await expect(page.locator('#legend .title span').first()).toHaveText(label);
       if (needle) expect(requests.some((u) => u.includes(needle)), `${id} lädt ${needle}`).toBe(true);
       const now = await canvasStats(page, 'field-canvas');
@@ -62,11 +63,12 @@ test.describe('Karte, Layer und Zeitleiste', () => {
     await waitForData(page);
     await selectLayer(page, 'temp');
     await waitForData(page);
-    const before = await canvasStats(page, 'field-canvas');
+    expect((await canvasStats(page, 'iso-canvas')).opaque).toBe(0);
     await selectLayer(page, 'pressure');
     await waitForData(page);
-    const after = await canvasStats(page, 'field-canvas');
-    expect(after.white).toBeGreaterThan(before.white + 20);
+    const iso = await canvasStats(page, 'iso-canvas');
+    expect(iso.opaque).toBeGreaterThan(20);
+    expect(iso.white).toBeGreaterThan(5);
   });
 
   test('Zeitleiste: Schieberegler und Abspielen ändern Zeitpunkt und Karte', async ({ page }) => {
@@ -130,7 +132,12 @@ test.describe('Karte, Layer und Zeitleiste', () => {
     // step to a nowcast frame
     await slider.fill('14');
     await expect(page.locator('.time-label .sub')).toHaveText(/in|jetzt/);
-    // back to forecast restores the forecast timeline
+    // radar together with wind uses the forecast time line and the newest radar frame
+    await setLayers(page, ['wind', 'radar']);
+    await expect(slider).toHaveAttribute('max', String(5 * 24 - 1));
+    await expect(page.locator('.radar-tiles')).not.toHaveCount(0);
+    await expect(page.locator('#legend .legend-item')).toHaveCount(2);
+    // back to forecast only removes the radar
     await selectLayer(page, 'wind');
     await expect(slider).toHaveAttribute('max', String(5 * 24 - 1));
     await expect(page.locator('.radar-tiles')).toHaveCount(0);
@@ -147,5 +154,103 @@ test.describe('Karte, Layer und Zeitleiste', () => {
     await page.getByTestId('toggle-particles').check();
     await page.waitForTimeout(300);
     expect((await canvasStats(page, 'particle-canvas')).opaque).toBeGreaterThan(0);
+  });
+
+  test('mehrere Ebenen gleichzeitig: zwei Legenden, Bild aus beiden', async ({ page }) => {
+    await openApp(page);
+    await waitForData(page);
+    await setLayers(page, ['temp']);
+    await waitForData(page);
+    const temp = await canvasStats(page, 'field-canvas');
+    await setLayers(page, ['rain']);
+    await waitForData(page);
+    const rain = await canvasStats(page, 'field-canvas');
+    await setLayers(page, ['temp', 'rain']);
+    await waitForData(page);
+    const both = await canvasStats(page, 'field-canvas');
+    await expect(page.locator('#legend .legend-item')).toHaveCount(2);
+    await expect(page.locator('#legend [data-legend="temp"]')).toBeVisible();
+    await expect(page.locator('#legend [data-legend="rain"]')).toBeVisible();
+    expect(both.sum).not.toBe(temp.sum);
+    expect(both.sum).not.toBe(rain.sum);
+    await page.reload();
+    await expect(page.locator('#legend .legend-item')).toHaveCount(2);
+  });
+
+  test('alle Ebenen aus: nur noch Karte, keine Farben, Linien oder Legende', async ({ page }) => {
+    await openApp(page);
+    await waitForData(page);
+    await toggleLayer(page, 'wind');
+    await page.waitForTimeout(300);
+    expect((await canvasStats(page, 'field-canvas')).opaque).toBe(0);
+    expect((await canvasStats(page, 'particle-canvas')).opaque).toBe(0);
+    await expect(page.locator('#legend .legend-item')).toHaveCount(0);
+    const toggle = page.getByTestId('layer-toggle');
+    if (await toggle.isVisible()) await expect(toggle).toContainText('Keine Ebene');
+    await expect(page.locator('.leaflet-tile-pane img').first()).toBeVisible(); // base map still there
+  });
+
+  test('Windlinien nur bei Wind Ebenen', async ({ page }) => {
+    await openApp(page);
+    await waitForData(page);
+    for (const id of ['temp', 'rain', 'clouds', 'pressure', 'humidity', 'waves', 'pm25']) {
+      await setLayers(page, [id]);
+      await waitForData(page);
+      await page.waitForTimeout(150);
+      expect((await canvasStats(page, 'particle-canvas')).opaque, id).toBe(0);
+    }
+    for (const id of ['wind', 'gust', 'wind850']) {
+      await setLayers(page, [id]);
+      await waitForData(page);
+      await page.waitForTimeout(400);
+      expect((await canvasStats(page, 'particle-canvas')).opaque, id).toBeGreaterThan(20);
+    }
+    await setLayers(page, ['temp', 'wind']);
+    await waitForData(page);
+    await page.waitForTimeout(400);
+    expect((await canvasStats(page, 'particle-canvas')).opaque).toBeGreaterThan(20);
+  });
+
+  test('ganze Erde sichtbar und mit Wetterdaten gefüllt', async ({ page }) => {
+    const requests: string[] = [];
+    await openApp(page, { requests });
+    await waitForData(page);
+    await setView(page, 20, 0, 0);
+    await waitForData(page);
+    const span = await page.evaluate(() => {
+      const b = (window as any).__windblick.map.getBounds();
+      return b.getEast() - b.getWest();
+    });
+    expect(span).toBeGreaterThanOrEqual(360);
+    const last = new URL(requests.filter((u) => u.includes('/v1/forecast')).pop()!);
+    const n = last.searchParams.get('latitude')!.split(',').length;
+    expect(n).toBeGreaterThan(220);
+    expect(n).toBeLessThanOrEqual(450);
+    expect((await canvasStats(page, 'field-canvas')).opaque).toBeGreaterThan(1000);
+  });
+
+  test('erster Start zeigt die ganze Erdbreite', async ({ page }) => {
+    await openApp(page, { freshView: true });
+    const span = await page.evaluate(() => {
+      const b = (window as any).__windblick.map.getBounds();
+      return b.getEast() - b.getWest();
+    });
+    expect(span).toBeGreaterThanOrEqual(270);
+  });
+
+  test('Ortsnamen liegen über den Wetterfarben', async ({ page }) => {
+    await openApp(page);
+    await waitForData(page);
+    const z = await page.evaluate(() => {
+      const m = (window as any).__windblick.map;
+      return { labels: Number(m.getPane('labels').style.zIndex), field: Number(m.getPane('field').style.zIndex) };
+    });
+    expect(z.labels).toBeGreaterThan(z.field);
+    const src = await page.locator('.label-tiles img').first().getAttribute('src');
+    expect(src).toContain('dark_only_labels');
+    expect(await page.locator('.leaflet-tile-pane img').first().getAttribute('src')).toContain('dark_all');
+    // no blend mode that iOS Safari renders unreliably
+    const blend = await page.evaluate(() => Array.from(document.querySelectorAll('.leaflet-pane')).map((p) => getComputedStyle(p).mixBlendMode));
+    expect(blend.every((b) => b === 'normal')).toBe(true);
   });
 });

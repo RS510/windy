@@ -206,6 +206,12 @@ button {
   font-size: 16px;
 }
 
+.layer-btn .check {
+  margin-left: auto;
+  padding-left: 6px;
+  font-weight: 700;
+}
+
 .layer-btn.active {
   background: var(--accent);
   color: #1b1405;
@@ -333,15 +339,24 @@ button {
   flex: 1;
   max-width: 440px;
   margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.legend:empty {
+  display: none;
+}
+
+.legend-item {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 4px 8px 3px;
   font-size: 11px;
-}
-
-.legend:empty {
-  display: none;
 }
 
 .legend .bar {
@@ -586,7 +601,7 @@ button {
   left: 0;
   right: 0;
   bottom: 0;
-  height: min(78vh, 720px);
+  height: min(62vh, 640px);
   border-radius: 18px 18px 0 0;
   transform: translateY(105%);
   padding-bottom: var(--safe-bottom);
@@ -729,7 +744,6 @@ button {
 }
 
 .form input[type='text'],
-.form input[type='number'],
 .form select {
   width: 100%;
   height: 42px;
@@ -927,6 +941,16 @@ table.data td:first-child {
     max-width: none;
   }
   .sheet {
-    height: 82vh;
+    height: 62vh;
   }
+}
+
+.pp-name {
+  font-weight: 700;
+  font-size: 16px;
+  margin-right: 14px;
+}
+
+.pp-layer {
+  color: var(--text);
 }

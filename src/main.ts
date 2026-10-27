@@ -1,14 +1,14 @@
 import './styles.css';
 import L from 'leaflet';
-import { createMap } from './map/mapView';
-import { FieldLayer } from './map/fieldLayer';
+import { createMap, worldZoom } from './map/mapView';
+import { FieldLayer, type FieldData } from './map/fieldLayer';
 import { ParticleLayer } from './map/particleLayer';
 import { RadarLayer } from './map/radarLayer';
 import { state, subscribe, update, currentTime } from './state';
-import { getLayer } from './layers/definitions';
+import { getLayer, particleLayer, radarOnly } from './layers/definitions';
 import { loadGrid, timeIndexFor } from './data/store';
 import { nearestTimeIndex, sampleGrid, type Bounds, type Grid } from './data/grid';
-import { fetchRadar } from './data/rainviewer';
+import { fetchRadar, type RadarInfo } from './data/rainviewer';
 import { fetchSpots, type Series } from './data/openMeteo';
 import { initLayerMenu, initLegend, initModelPicker, initTimeline } from './ui/controls';
 import { initSearch } from './ui/search';
@@ -23,18 +23,22 @@ import { RATING_COLOR, RATING_LABEL, rateHour, type Spot } from './util/spotRati
 
 // ---------- map & layers ----------
 
-const view = load<{ c: [number, number]; z: number }>('view', { c: [50.5, 10], z: 5 });
+const firstView = { c: [25, 10] as [number, number], z: worldZoom(window.innerWidth) };
+const view = load<{ c: [number, number]; z: number }>('view', firstView);
 const map = createMap($('#map'), view.c, view.z);
 const field = new FieldLayer(map);
 const particles = new ParticleLayer(map);
 const radar = new RadarLayer(map);
 particles.setEnabled(state.particles);
 
-const grids: { base?: Grid; extra?: Grid } = {};
+type GridSource = 'base' | 'upper' | 'marine' | 'air';
+const grids: Partial<Record<GridSource, Grid>> = {};
 let forecastTimes: number[] = [];
+let radarInfo: RadarInfo | null = null;
 let loadSeq = 0;
 
 const isMobile = () => window.innerWidth < 700;
+const activeLayers = () => state.layers.map(getLayer);
 
 function paddedBounds(): Bounds {
   const b = map.getBounds();
@@ -43,22 +47,26 @@ function paddedBounds(): Bounds {
   return { south: b.getSouth() - latPad, north: b.getNorth() + latPad, west: b.getWest() - lonPad, east: b.getEast() + lonPad };
 }
 
-/** Loads the grids needed for the current view, layer and model, then renders. */
+/** Loads the grids needed for the current view, active layers and model, then renders. */
 async function refresh(): Promise<void> {
   const seq = ++loadSeq;
-  const layer = getLayer(state.layer);
   const bounds = paddedBounds();
-  const points = isMobile() ? 140 : 190;
+  // A finer grid when the whole earth is visible, otherwise one cell would span ~20°.
+  const world = map.getZoom() <= 2;
+  const points = world ? 350 : isMobile() ? 140 : 190;
+  const maxPoints = world ? 450 : 220;
+  // Surface data is always needed for the popup values and the time line.
+  const sources = new Set<GridSource>(['base']);
+  for (const l of activeLayers()) if (l.source !== 'radar') sources.add(l.source);
   try {
-    const basePromise = loadGrid('base', bounds, state.model, points);
-    const extraSource = layer.source === 'upper' || layer.source === 'marine' || layer.source === 'air' ? layer.source : null;
-    const extraPromise = extraSource ? loadGrid(extraSource, bounds, state.model, points) : Promise.resolve(undefined);
-    const [base, extra] = await withLoading(Promise.all([basePromise, extraPromise]));
+    const list = [...sources];
+    const loaded = await withLoading(Promise.all(list.map((src) => loadGrid(src, bounds, state.model, points, maxPoints))));
     if (seq !== loadSeq) return;
-    grids.base = base;
-    grids.extra = extra;
+    for (const k of Object.keys(grids) as GridSource[]) delete grids[k];
+    list.forEach((src, i) => (grids[src] = loaded[i]));
     hideBanner('grid');
-    setForecastTimes(base.times);
+    forecastTimes = grids.base!.times;
+    syncTimeline();
     render();
   } catch (e) {
     if (seq !== loadSeq) return;
@@ -66,35 +74,52 @@ async function refresh(): Promise<void> {
   }
 }
 
-function setForecastTimes(times: number[]): void {
-  const same = times.length === forecastTimes.length && times.every((t, i) => t === forecastTimes[i]);
-  if (same) return;
-  const selected = currentTime();
-  forecastTimes = times;
-  if (getLayer(state.layer).source === 'radar') return;
-  update({ times, timeIndex: nearestTimeIndex(times, selected ?? nowUnix()) });
+/**
+ * The time line shows radar frames when the radar is the only active layer, otherwise the
+ * forecast hours. The selected moment is kept as close as possible when switching.
+ */
+function syncTimeline(): void {
+  const radarTimes = radarInfo?.frames.map((f) => f.time) ?? [];
+  const wantRadar = radarOnly(state.layers) && radarTimes.length > 0;
+  const times = wantRadar ? radarTimes : forecastTimes;
+  if (times === state.times || (times.length === state.times.length && times.every((t, i) => t === state.times[i]))) return;
+  let index: number;
+  if (wantRadar) index = Math.max(0, radarInfo!.frames.filter((f) => !f.nowcast).length - 1);
+  else index = nearestTimeIndex(times, state.times === radarTimes || !currentTime() ? nowUnix() : currentTime()!);
+  update({ times, timeIndex: index, playing: wantRadar ? false : state.playing });
 }
 
 function render(): void {
-  const layer = getLayer(state.layer);
+  const layers = activeLayers();
   const t = currentTime();
-  if (layer.source === 'radar') {
-    field.set(null);
-    radar.show(state.timeIndex);
-    // Particles keep showing the current surface wind under the radar.
-    const base = grids.base;
-    const bt = base ? nearestTimeIndex(base.times, nowUnix()) : -1;
-    particles.set(base && bt >= 0 ? { grid: base, speedVar: 'wind_speed_10m', dirVar: 'wind_direction_10m', t: bt } : null);
-  } else {
-    const grid = layer.source === 'base' ? grids.base : grids.extra;
+  const radarTimeline = radarOnly(state.layers) && radarInfo !== null;
+
+  // Colour fields of all active layers, drawn in their fixed order.
+  const fields: FieldData[] = [];
+  let outOfRange = false;
+  for (const l of layers) {
+    if (l.source === 'radar' || !l.variable || !l.scale) continue;
+    const grid = grids[l.source];
     const ti = grid ? timeIndexFor(grid, t) : -1;
-    field.set(grid && ti >= 0 && layer.variable && layer.scale ? { grid, variable: layer.variable, t: ti, scale: layer.scale, iso: layer.isolines } : null);
-    if (grid && ti < 0 && layer.source === 'air') showBanner('Luftqualität ist nur für die nächsten 5 Tage verfügbar.', { info: true, id: 'range' });
-    else hideBanner('range');
-    const pGrid = layer.source === 'upper' ? grids.extra : grids.base;
-    const pt = pGrid ? timeIndexFor(pGrid, t) : -1;
-    particles.set(pGrid && pt >= 0 && layer.particles ? { grid: pGrid, speedVar: layer.particles[0], dirVar: layer.particles[1], t: pt } : null);
+    if (grid && ti < 0) outOfRange = true;
+    if (grid && ti >= 0) fields.push({ grid, variable: l.variable, t: ti, scale: l.scale, alpha: l.alpha, iso: l.isolines });
   }
+  field.set(fields);
+  if (outOfRange) showBanner('Luftqualität ist nur für die nächsten 5 Tage verfügbar.', { info: true, id: 'range' });
+  else hideBanner('range');
+
+  // Radar: follows the time line when shown alone, otherwise shows the newest frame.
+  if (state.layers.includes('radar') && radarInfo) {
+    const lastPast = Math.max(0, radarInfo.frames.filter((f) => !f.nowcast).length - 1);
+    radar.show(radarTimeline ? state.timeIndex : lastPast);
+  }
+
+  // Wind particles only for wind layers.
+  const pl = particleLayer(state.layers);
+  const pGrid = pl ? grids[pl.source as GridSource] : undefined;
+  const pt = pGrid ? timeIndexFor(pGrid, radarTimeline ? nowUnix() : t) : -1;
+  particles.set(pl?.particles && pGrid && pt >= 0 ? { grid: pGrid, speedVar: pl.particles[0], dirVar: pl.particles[1], t: pt } : null);
+
   updateSpotMarkers();
   updatePopup();
 }
@@ -122,62 +147,67 @@ window.addEventListener('resize', () => {
 
 // ---------- radar ----------
 
-async function enterRadar(): Promise<void> {
+async function loadRadar(): Promise<void> {
   try {
     const info = await withLoading(fetchRadar());
-    if (getLayer(state.layer).source !== 'radar') return;
-    radar.setInfo(info);
+    if (!state.layers.includes('radar')) return;
     if (!info.frames.length) throw new Error('keine Radarbilder verfügbar');
-    const lastPast = Math.max(0, info.frames.filter((f) => !f.nowcast).length - 1);
-    update({ times: info.frames.map((f) => f.time), timeIndex: lastPast });
+    radarInfo = info;
+    radar.setInfo(info);
     hideBanner('radar');
+    syncTimeline();
     render();
   } catch (e) {
-    showBanner(`Regenradar konnte nicht geladen werden: ${(e as Error).message}`, { retry: enterRadar, id: 'radar' });
+    showBanner(`Regenradar konnte nicht geladen werden: ${(e as Error).message}`, { retry: loadRadar, id: 'radar' });
   }
 }
 
-function leaveRadar(): void {
+function dropRadar(): void {
+  radarInfo = null;
   radar.setInfo(null);
   hideBanner('radar');
-  update({ times: forecastTimes, timeIndex: nearestTimeIndex(forecastTimes, nowUnix()) });
 }
 
 // ---------- popup ----------
 
 let popupLoc: L.LatLng | null = null;
+let popupName: string | undefined;
 const popup = L.popup({ autoPan: true, closeButton: true, maxWidth: 260, autoPanPaddingTopLeft: [10, 70], autoPanPaddingBottomRight: [60, 150] });
 popup.on('remove', () => (popupLoc = null));
 
-function popupContent(ll: L.LatLng): HTMLElement {
-  const layer = getLayer(state.layer);
+function popupContent(ll: L.LatLng, name?: string): HTMLElement {
   const t = currentTime();
   const u = state.units;
-  const base = grids.base;
-  const bt = base ? timeIndexFor(base, layer.source === 'radar' ? nowUnix() : t) : -1;
-  const sample = (g: Grid | undefined, ti: number, v: string) => (g && ti >= 0 ? sampleGrid(g, v, ti, ll.lat, ll.lng) : NaN);
-  const b = (v: string) => sample(base, bt, v);
-  const extraT = grids.extra ? timeIndexFor(grids.extra, t) : -1;
-  let main = '';
-  if (layer.variable && layer.quantity) {
-    const g = layer.source === 'base' ? base : grids.extra;
-    const ti = layer.source === 'base' ? bt : extraT;
-    main = formatValue(layer.quantity, sample(g, ti, layer.variable), u);
+  const radarTimeline = radarOnly(state.layers) && radarInfo !== null;
+  const sample = (src: GridSource, v: string, time = t) => {
+    const g = grids[src];
+    const ti = g ? timeIndexFor(g, time) : -1;
+    return g && ti >= 0 ? sampleGrid(g, v, ti, ll.lat, ll.lng) : NaN;
+  };
+  const b = (v: string) => sample('base', v, radarTimeline ? nowUnix() : t);
+  const mains: [string, string][] = [];
+  const extras: [string, string][] = [];
+  for (const l of [...activeLayers()].reverse()) {
+    if (l.source === 'radar' || !l.variable || !l.quantity) continue;
+    mains.push([l.label, formatValue(l.quantity, sample(l.source, l.variable), u)]);
+    for (const [v, q, label] of l.extra ?? []) extras.push([label, formatValue(q, sample(l.source, v), u)]);
   }
   const rows: [string, string][] = [
     ['Wind', `${formatValue('wind', b('wind_speed_10m'), u)} ${compass(b('wind_direction_10m'))}`],
     ['Böen', formatValue('wind', b('wind_gusts_10m'), u)],
     ['Temperatur', formatValue('temp', b('temperature_2m'), u)],
     ['Regen', `${formatValue('precip', b('precipitation'), u)}/h`],
+    ...extras,
   ];
-  for (const [v, q, label] of layer.extra ?? []) rows.push([label, formatValue(q, sample(grids.extra, extraT, v), u)]);
-  const loc: Location = { lat: ll.lat, lon: wrap(ll.lng) };
+  const loc: Location = { lat: ll.lat, lon: wrap(ll.lng), name };
   return h(
     'div',
     { 'data-testid': 'popup' },
+    name ? h('div', { class: 'pp-name', 'data-testid': 'popup-name' }, name) : null,
     h('div', { class: 'pp-coords' }, `${loc.lat.toFixed(3)}, ${loc.lon.toFixed(3)}`),
-    main ? h('div', { class: 'pp-main', 'data-testid': 'popup-main' }, main) : null,
-    main ? h('div', { class: 'pp-coords' }, layer.label) : null,
+    mains.length ? h('div', { class: 'pp-main', 'data-testid': 'popup-main' }, mains[0][1]) : null,
+    mains.length ? h('div', { class: 'pp-coords' }, mains[0][0]) : null,
+    mains.slice(1).map(([k, v]) => h('div', { class: 'pp-row pp-layer' }, k, h('b', {}, v))),
     rows.map(([k, v]) => h('div', { class: 'pp-row' }, k, h('b', {}, v))),
     h(
       'div',
@@ -192,17 +222,19 @@ function wrap(lon: number): number {
   return ((((lon + 180) % 360) + 360) % 360) - 180;
 }
 
-function openPopup(ll: L.LatLng): void {
+function openPopup(ll: L.LatLng, name?: string): void {
   popupLoc = ll;
-  popup.setLatLng(ll).setContent(popupContent(ll)).openOn(map);
+  popupName = name;
+  popup.setLatLng(ll).setContent(popupContent(ll, name)).openOn(map);
 }
 
 function updatePopup(): void {
-  if (popupLoc && map.hasLayer(popup)) popup.setContent(popupContent(popupLoc));
+  if (popupLoc && map.hasLayer(popup)) popup.setContent(popupContent(popupLoc, popupName));
 }
 
 map.on('click', (e: L.LeafletMouseEvent) => {
   closePanels();
+  layerMenu.collapse();
   openPopup(e.latlng);
 });
 
@@ -263,7 +295,7 @@ function renderMarkers(): void {
 }
 
 function updateSpotMarkers(): void {
-  const t = getLayer(state.layer).source === 'radar' ? nowUnix() : currentTime() ?? nowUnix();
+  const t = radarOnly(state.layers) && radarInfo ? nowUnix() : currentTime() ?? nowUnix();
   for (const { spot, marker, series } of spotMarkers) {
     const el = marker.getElement()?.querySelector<HTMLElement>('.spot-marker');
     if (!el) continue;
@@ -284,7 +316,7 @@ function updateSpotMarkers(): void {
 
 // ---------- UI wiring ----------
 
-initLayerMenu();
+const layerMenu = initLayerMenu();
 initLegend();
 initModelPicker();
 initTimeline();
@@ -297,10 +329,11 @@ const settings = initSettingsPanel();
 $('#btn-places').addEventListener('click', () => places.open());
 $('#btn-settings').addEventListener('click', () => settings.open());
 
+// Search only moves the map and shows the small popup; the forecast opens from there.
 initSearch((p) => {
-  map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 9));
-  map.once('moveend', () => openPopup(L.latLng(p.lat, p.lon)));
-  sheet.open({ lat: p.lat, lon: p.lon, name: p.name });
+  sheet.close();
+  map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 9), { duration: 1.2 });
+  map.once('moveend', () => openPopup(L.latLng(p.lat, p.lon), p.name));
 });
 
 $('#btn-locate').addEventListener('click', () => {
@@ -322,14 +355,12 @@ $('#btn-locate').addEventListener('click', () => {
 });
 
 subscribe((s, c) => {
-  if (c.has('layer')) {
-    const radarNow = getLayer(s.layer).source === 'radar';
-    if (radarNow) {
-      update({ playing: false });
-      enterRadar();
-    } else if (radar.frames.length || s.times !== forecastTimes) {
-      leaveRadar();
-    }
+  if (c.has('layers')) {
+    const wantRadar = s.layers.includes('radar');
+    if (wantRadar && !radarInfo) loadRadar();
+    if (!wantRadar && radarInfo) dropRadar();
+    syncTimeline();
+    render();
     refresh();
     return;
   }
@@ -358,7 +389,7 @@ window.addEventListener('online', () => {
 renderMarkers();
 refresh();
 loadSpotForecasts();
-if (getLayer(state.layer).source === 'radar') enterRadar();
+if (state.layers.includes('radar')) loadRadar();
 if (!navigator.onLine) showBanner('Keine Internetverbindung. Angezeigt werden zuletzt geladene Daten.', { info: true, id: 'offline' });
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {

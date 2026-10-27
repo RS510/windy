@@ -83,8 +83,17 @@ test.describe('Suche und Standort', () => {
     await expect(item).toBeVisible();
     await expect(item).toContainText('Deutschland');
     await item.click();
-    await expect(page.getByTestId('sheet-title')).toHaveText('Berlin');
+    // Only the small popup opens, the map stays visible.
+    await expect(page.getByTestId('popup-name')).toHaveText('Berlin');
+    await expect(page.locator('#sheet')).not.toHaveClass(/open/);
     await expect.poll(async () => page.evaluate(() => (window as any).__windblick.map.getCenter().lat), { timeout: 5000 }).toBeCloseTo(52.52, 1);
+    await page.getByTestId('popup-forecast').click();
+    await expect(page.getByTestId('sheet-title')).toHaveText('Berlin');
+    // The sheet leaves the upper part of the map visible (measured after it slid in).
+    await page.waitForTimeout(400);
+    const box = await page.locator('#sheet').boundingBox();
+    const vh = page.viewportSize()!.height;
+    expect(box!.y).toBeGreaterThan(vh * 0.3);
   });
 
   test('Enter wählt den ersten Treffer, Koordinaten funktionieren', async ({ page }) => {
@@ -93,11 +102,10 @@ test.describe('Suche und Standort', () => {
     const input = page.locator('#search-input');
     await input.fill('Tarifa');
     await input.press('Enter');
-    await expect(page.getByTestId('sheet-title')).toHaveText('Tarifa');
-    await page.locator('#sheet .close-btn').click();
+    await expect(page.getByTestId('popup-name')).toHaveText('Tarifa');
     await input.fill('54.3, 8.6');
     await input.press('Enter');
-    await expect(page.getByTestId('sheet-sub')).toHaveText('54.300, 8.600');
+    await expect(page.getByTestId('popup')).toContainText('54.300, 8.600');
   });
 
   test('keine Treffer und Suchfehler werden angezeigt', async ({ page }) => {

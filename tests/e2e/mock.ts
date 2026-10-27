@@ -7,6 +7,8 @@ import { deflateSync } from 'node:zlib';
 export interface MockOptions {
   failForecast?: boolean;
   failGeocoding?: boolean;
+  /** Start like a first-time user (no stored map view). */
+  freshView?: boolean;
   /** Collected request URLs for assertions. */
   requests?: string[];
 }
@@ -189,6 +191,8 @@ export function png(size: number, pixel: (x: number, y: number) => [number, numb
 
 // Dark tile with a light diagonal "coastline" so the screen blend is visible.
 const BASE_TILE = png(256, (x, y) => (Math.abs(x - y) < 2 ? [180, 180, 180, 255] : [12, 12, 14, 255]));
+// Label tile: transparent with a light "text" bar, as place names are drawn over the colours.
+const LABEL_TILE = png(256, (x, y) => (y > 120 && y < 132 && x > 90 && x < 170 ? [235, 235, 235, 255] : [0, 0, 0, 0]));
 const RADAR_TILE = png(256, (x, y) => ((x - 128) ** 2 + (y - 128) ** 2 < 90 ** 2 ? [40, 140, 230, 200] : [0, 0, 0, 0]));
 
 // ---------- routing ----------
@@ -237,6 +241,11 @@ export async function installMocks(target: Page | BrowserContext, opts: MockOpti
     return route.fulfill({ status: 200, contentType: 'image/png', body: RADAR_TILE, headers: { 'access-control-allow-origin': '*' } });
   });
   await target.route(/^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//, (route) =>
-    route.fulfill({ status: 200, contentType: 'image/png', body: BASE_TILE, headers: { 'access-control-allow-origin': '*' } }),
+    route.fulfill({
+      status: 200,
+      contentType: 'image/png',
+      body: route.request().url().includes('only_labels') ? LABEL_TILE : BASE_TILE,
+      headers: { 'access-control-allow-origin': '*' },
+    }),
   );
 }

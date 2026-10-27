@@ -1,5 +1,5 @@
 import type { LayerId, ModelId } from './layers/definitions';
-import { LAYERS, MODELS } from './layers/definitions';
+import { MODELS, normalizeLayers } from './layers/definitions';
 import { DEFAULT_UNITS, type UnitSettings } from './util/units';
 import type { Spot } from './util/spotRating';
 import { load, save } from './util/storage';
@@ -12,7 +12,8 @@ export interface Favorite {
 }
 
 export interface AppState {
-  layer: LayerId;
+  /** Active map layers (any number, may be empty), in drawing order. */
+  layers: LayerId[];
   model: ModelId;
   /** Forecast hours available on the timeline (unix seconds). */
   times: number[];
@@ -27,13 +28,12 @@ export interface AppState {
 type Key = keyof AppState;
 type Listener = (s: AppState, changed: Set<Key>) => void;
 
-const PERSISTED: Key[] = ['layer', 'model', 'units', 'favorites', 'spots', 'particles'];
+const PERSISTED: Key[] = ['layers', 'model', 'units', 'favorites', 'spots', 'particles'];
 
 function initial(): AppState {
-  const layer = load<LayerId>('layer', 'wind');
   const model = load<ModelId>('model', 'best_match');
   return {
-    layer: LAYERS.some((l) => l.id === layer) ? layer : 'wind',
+    layers: normalizeLayers(load<unknown>('layers', null), load<unknown>('layer', null)),
     model: MODELS.some((m) => m.id === model) ? model : 'best_match',
     times: [],
     timeIndex: 0,

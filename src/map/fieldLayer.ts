@@ -11,63 +11,80 @@ export interface FieldData {
   variable: string;
   t: number;
   scale: ColorScale;
+  /** Opacity when drawn on top of other layers. */
+  alpha?: number;
   iso?: { variable: string; interval: number };
 }
 
-/** Colour-filled weather field plus optional isolines (isobars). */
+/**
+ * Colour-filled weather fields of all active layers, drawn bottom to top, plus isolines
+ * (isobars) on their own canvas so they stay crisp above the semi-transparent colours.
+ */
 export class FieldLayer {
   private vc: ViewportCanvas;
+  private iso: ViewportCanvas;
   private small = document.createElement('canvas');
-  private data: FieldData | null = null;
+  private data: FieldData[] = [];
 
   constructor(map: L.Map) {
     this.vc = new ViewportCanvas(map, 'field', 250, 'field-canvas');
     this.vc.canvas.dataset.testid = 'field-canvas';
+    // Let the base map (coastlines, borders) shine through the colours.
+    this.vc.canvas.style.opacity = '0.62';
+    this.iso = new ViewportCanvas(map, 'isolines', 380, 'iso-canvas');
+    this.iso.canvas.dataset.testid = 'iso-canvas';
   }
 
-  set(data: FieldData | null): void {
+  set(data: FieldData[]): void {
     this.data = data;
     this.redraw();
   }
 
   show(v: boolean): void {
     this.vc.show(v);
+    this.iso.show(v);
   }
 
   redraw(): void {
     const vc = this.vc;
     vc.resize();
     vc.clear();
-    const d = this.data;
-    if (!d) return;
-    const values = d.grid.vars[d.variable]?.[d.t];
-    if (!values) return;
-    const { spec } = d.grid;
+    this.iso.resize();
+    this.iso.clear();
+    if (!this.data.length) return;
     const { lons, lats, cols, rows } = vc.axes(STEP);
-    const fx = new Float64Array(cols);
-    const fy = new Float64Array(rows);
-    for (let x = 0; x < cols; x++) fx[x] = gridIndex(spec, 0, lons[x])[0];
-    for (let y = 0; y < rows; y++) fy[y] = gridIndex(spec, lats[y], 0)[1];
+    this.data.forEach((d, i) => {
+      const values = d.grid.vars[d.variable]?.[d.t];
+      if (!values) return;
+      const { spec } = d.grid;
+      const fx = new Float64Array(cols);
+      const fy = new Float64Array(rows);
+      for (let x = 0; x < cols; x++) fx[x] = gridIndex(spec, 0, lons[x])[0];
+      for (let y = 0; y < rows; y++) fy[y] = gridIndex(spec, lats[y], 0)[1];
 
-    this.small.width = cols;
-    this.small.height = rows;
-    const sctx = this.small.getContext('2d')!;
-    const img = sctx.createImageData(cols, rows);
-    const px = img.data;
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const v = bilinear(values, spec.nx, spec.ny, fx[x], fy[y]);
-        colorAt(d.scale, v, px, (y * cols + x) * 4);
+      this.small.width = cols;
+      this.small.height = rows;
+      const sctx = this.small.getContext('2d')!;
+      const img = sctx.createImageData(cols, rows);
+      const px = img.data;
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const v = bilinear(values, spec.nx, spec.ny, fx[x], fy[y]);
+          colorAt(d.scale, v, px, (y * cols + x) * 4);
+        }
       }
-    }
-    sctx.putImageData(img, 0, 0);
+      sctx.putImageData(img, 0, 0);
 
-    const ctx = vc.ctx;
-    ctx.imageSmoothingEnabled = true;
-    ctx.setTransform(vc.dpr, 0, 0, vc.dpr, 0, 0);
-    ctx.drawImage(this.small, 0, 0, cols * STEP, rows * STEP);
+      const ctx = vc.ctx;
+      ctx.imageSmoothingEnabled = true;
+      ctx.setTransform(vc.dpr, 0, 0, vc.dpr, 0, 0);
+      // Layers above the first are blended so the ones below remain recognisable.
+      ctx.globalAlpha = i === 0 ? 1 : d.alpha ?? 0.55;
+      ctx.drawImage(this.small, 0, 0, cols * STEP, rows * STEP);
+      ctx.globalAlpha = 1;
 
-    if (d.iso) this.drawIsolines(d, fx, fy);
+      if (d.iso) this.drawIsolines(d, fx, fy);
+    });
   }
 
   private drawIsolines(d: FieldData, fx: Float64Array, fy: Float64Array): void {
@@ -75,7 +92,8 @@ export class FieldLayer {
     const values = d.grid.vars[iso.variable]?.[d.t];
     if (!values) return;
     const { spec } = d.grid;
-    const ctx = this.vc.ctx;
+    const ctx = this.iso.ctx;
+    ctx.setTransform(this.iso.dpr, 0, 0, this.iso.dpr, 0, 0);
     // Map grid coordinates back to screen via the inverse of the column/row lookups.
     const toScreenX = (gx: number) => invert(fx, gx) * STEP;
     const toScreenY = (gy: number) => invert(fy, gy) * STEP;
@@ -96,7 +114,7 @@ export class FieldLayer {
       const seg = line.segments.find(([ax, ay]) => {
         const x = toScreenX(ax);
         const y = toScreenY(ay);
-        return x > 20 && y > 20 && x < this.vc.width - 20 && y < this.vc.height - 20;
+        return x > 20 && y > 20 && x < this.iso.width - 20 && y < this.iso.height - 20;
       });
       if (seg) {
         const x = toScreenX(seg[0]);

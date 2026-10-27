@@ -1,14 +1,14 @@
 import { $, clear, h } from './dom';
 import { state, subscribe, update } from '../state';
-import { LAYERS, MODELS, getLayer, modelLabel } from '../layers/definitions';
+import { LAYERS, MODELS, getLayer, modelLabel, radarOnly, toggleLayerId, type LayerId } from '../layers/definitions';
 import { convert, unitLabel } from '../util/units';
 import { dayKey, fmtDay, fmtHour, fmtWeekday, nowUnix } from '../util/time';
 
 // ---------- layer menu ----------
 
-export function initLayerMenu(): void {
+export function initLayerMenu(): { collapse: () => void } {
   const menu = $('#layer-menu');
-  // On phones the list is collapsed behind one button showing the active layer.
+  // On phones the list is collapsed behind one button; it stays open while toggling layers.
   const toggle = h('button', { class: 'layer-btn layer-toggle', 'data-testid': 'layer-toggle', 'aria-expanded': 'false' });
   const list = h('div', { class: 'layer-list' });
   menu.append(toggle, list);
@@ -18,69 +18,87 @@ export function initLayerMenu(): void {
   };
   toggle.addEventListener('click', () => setExpanded(!menu.classList.contains('expanded')));
   const render = () => {
-    const active = getLayer(state.layer);
+    const active = state.layers;
     clear(toggle);
-    toggle.append(h('span', { class: 'ico' }, active.icon), h('span', { class: 'lbl' }, active.label));
-    toggle.setAttribute('aria-label', `Ebene wählen, aktiv: ${active.label}`);
+    if (active.length === 1) {
+      const l = getLayer(active[0]);
+      toggle.append(h('span', { class: 'ico' }, l.icon), h('span', { class: 'lbl' }, l.label));
+    } else {
+      toggle.append(h('span', { class: 'ico' }, '☰'), h('span', { class: 'lbl' }, active.length ? `${active.length} Ebenen` : 'Keine Ebene'));
+    }
+    toggle.setAttribute('aria-label', `Ebenen wählen, aktiv: ${active.length ? active.map((id) => getLayer(id).label).join(', ') : 'keine'}`);
     clear(list);
     for (const l of LAYERS) {
+      const on = active.includes(l.id);
       list.appendChild(
         h(
           'button',
           {
-            class: `layer-btn${state.layer === l.id ? ' active' : ''}`,
+            class: `layer-btn${on ? ' active' : ''}`,
             'data-layer': l.id,
             title: l.label,
             'aria-label': l.label,
-            'aria-pressed': state.layer === l.id ? 'true' : 'false',
-            onclick: () => {
-              setExpanded(false);
-              update({ layer: l.id });
-            },
+            'aria-pressed': on ? 'true' : 'false',
+            onclick: () => update({ layers: toggleLayerId(state.layers, l.id) }),
           },
           h('span', { class: 'ico' }, l.icon),
           h('span', { class: 'lbl' }, l.label),
+          h('span', { class: 'check', 'aria-hidden': 'true' }, on ? '✓' : ''),
         ),
       );
     }
   };
   render();
-  subscribe((_, c) => c.has('layer') && render());
+  subscribe((_, c) => c.has('layers') && render());
+  return { collapse: () => setExpanded(false) };
 }
 
 // ---------- legend ----------
 
+function legendFor(id: LayerId): HTMLElement | null {
+  const l = getLayer(id);
+  if (l.source === 'radar') {
+    return h(
+      'div',
+      { class: 'legend-item', 'data-legend': id },
+      h('div', { class: 'title' }, h('span', {}, 'Regenradar'), h('span', {}, 'leicht → stark')),
+      h('div', { class: 'bar', style: 'background:linear-gradient(90deg,#88ddee,#0099cc,#0077aa,#ffee00,#ff9900,#ff4400,#c10000,#ff00ff)' }),
+    );
+  }
+  if (!l.scale || !l.legend || !l.quantity) return null;
+  const { scale } = l;
+  const span = scale.max - scale.min;
+  const grad = scale.stops.map(([v, c]) => `${c.length > 7 ? c.slice(0, 7) : c} ${(((v - scale.min) / span) * 100).toFixed(1)}%`).join(',');
+  const unit = unitLabel(l.quantity, state.units);
+  return h(
+    'div',
+    { class: 'legend-item', 'data-legend': id },
+    h('div', { class: 'title' }, h('span', {}, l.label), h('span', { 'data-testid': 'legend-unit' }, unit)),
+    h('div', { class: 'bar', style: `background:linear-gradient(90deg,${grad})` }),
+    h(
+      'div',
+      { class: 'ticks' },
+      l.legend.map((v) => {
+        const c = convert(l.quantity!, v, state.units);
+        const txt = Math.abs(c) < 10 && c % 1 !== 0 ? c.toFixed(1) : Math.round(c).toString();
+        return h('span', {}, txt.replace('.', ','));
+      }),
+    ),
+  );
+}
+
+/** One compact legend per active layer, topmost layer first. */
 export function initLegend(): void {
   const el = $('#legend');
   const render = () => {
     clear(el);
-    const l = getLayer(state.layer);
-    if (l.source === 'radar') {
-      el.appendChild(h('div', { class: 'title' }, h('span', {}, 'Regenradar'), h('span', {}, 'leicht → stark')));
-      el.appendChild(h('div', { class: 'bar', style: 'background:linear-gradient(90deg,#88ddee,#0099cc,#0077aa,#ffee00,#ff9900,#ff4400,#c10000,#ff00ff)' }));
-      return;
+    for (const id of [...state.layers].reverse()) {
+      const item = legendFor(id);
+      if (item) el.appendChild(item);
     }
-    if (!l.scale || !l.legend || !l.quantity) return;
-    const { scale } = l;
-    const span = scale.max - scale.min;
-    const grad = scale.stops.map(([v, c]) => `${c.length > 7 ? c.slice(0, 7) : c} ${(((v - scale.min) / span) * 100).toFixed(1)}%`).join(',');
-    const unit = unitLabel(l.quantity, state.units);
-    el.appendChild(h('div', { class: 'title' }, h('span', {}, l.label), h('span', { 'data-testid': 'legend-unit' }, unit)));
-    el.appendChild(h('div', { class: 'bar', style: `background:linear-gradient(90deg,${grad})` }));
-    el.appendChild(
-      h(
-        'div',
-        { class: 'ticks' },
-        l.legend.map((v) => {
-          const c = convert(l.quantity!, v, state.units);
-          const txt = Math.abs(c) < 10 && c % 1 !== 0 ? c.toFixed(1) : Math.round(c).toString();
-          return h('span', {}, txt.replace('.', ','));
-        }),
-      ),
-    );
   };
   render();
-  subscribe((_, c) => (c.has('layer') || c.has('units')) && render());
+  subscribe((_, c) => (c.has('layers') || c.has('units')) && render());
 }
 
 // ---------- model picker ----------
@@ -89,7 +107,7 @@ export function initModelPicker(): void {
   const btn = $('#btn-model');
   const menu = $('#model-menu');
   const render = () => {
-    const radar = getLayer(state.layer).source === 'radar';
+    const radar = radarOnly(state.layers);
     btn.textContent = radar ? 'RainViewer' : `${modelLabel(state.model)} ▾`;
     btn.toggleAttribute('disabled', radar);
     clear(menu);
@@ -125,7 +143,7 @@ export function initModelPicker(): void {
     if (!menu.hidden && !menu.contains(e.target as Node)) toggle(false);
   });
   render();
-  subscribe((_, c) => (c.has('model') || c.has('layer')) && render());
+  subscribe((_, c) => (c.has('model') || c.has('layers')) && render());
 }
 
 // ---------- timeline ----------

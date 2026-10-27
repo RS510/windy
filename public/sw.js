@@ -1,6 +1,6 @@
 // Offline support: app shell is cached; weather data uses network first with cache fallback;
 // map tiles use cache first with a size limit.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `shell-${VERSION}`;
 const DATA = `data-${VERSION}`;
 const TILES = `tiles-${VERSION}`;

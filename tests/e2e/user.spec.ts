@@ -38,6 +38,8 @@ test.describe('Favoriten, Spots, Einstellungen', () => {
     await page.getByTestId('spot-edit').click();
     const form = page.getByTestId('spot-form');
     await expect(form).toBeVisible();
+    // Wait until the panel has finished sliding in, as a person would before tapping.
+    await expect.poll(() => page.locator('#panel-spot').evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m41)).toBe(0);
 
     // validation
     await page.getByTestId('spot-name').fill('Nordsee Test');
@@ -81,6 +83,29 @@ test.describe('Favoriten, Spots, Einstellungen', () => {
     await page.getByTestId('spot-form').getByRole('button', { name: 'Löschen' }).click();
     await expect(page.getByTestId('spot-marker')).toHaveCount(0);
     expect(errors).toEqual([]);
+  });
+
+  test('Spot mit vorbelegten Werten lässt sich direkt speichern, auch in m/s mit Komma', async ({ page }) => {
+    await openApp(page);
+    await waitForData(page);
+    await clickLatLng(page, 52, 5);
+    await page.getByTestId('popup-forecast').click();
+    await page.getByTestId('spot-edit').click();
+    await expect(page.getByTestId('spot-max')).toHaveValue('50'); // 14 m/s, rounded
+    await page.getByTestId('spot-name').fill('Standard');
+    await page.getByTestId('spot-save').click();
+    await expect(page.getByTestId('spot-form')).toBeHidden();
+    await expect(page.getByTestId('spot-marker')).toHaveCount(1);
+
+    await page.locator('#btn-settings').click();
+    await page.locator('[data-setting="wind"] [data-value="ms"]').click();
+    await page.locator('#panel-settings .close-btn').click();
+    await page.getByTestId('spot-edit').click(); // detail sheet of the new spot is still open
+    await page.getByTestId('spot-min').fill('5,5');
+    await page.getByTestId('spot-save').click();
+    await expect(page.getByTestId('spot-form')).toBeHidden();
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('windblick:spots')!)[0].minWind);
+    expect(stored).toBeCloseTo(5.5);
   });
 
   test('Spot Tooltip zeigt Bewertung an der Karte', async ({ page }) => {

@@ -109,3 +109,30 @@ describe('colour scales', () => {
     expect(getLayer('nope' as any).id).toBe('wind');
   });
 });
+
+import { normalizeLayers, particleLayer, radarOnly, sortLayers, toggleLayerId } from '../../src/layers/definitions';
+
+describe('active layers', () => {
+  it('takes over the single layer stored by older versions', () => {
+    expect(normalizeLayers(null, 'temp')).toEqual(['temp']);
+    expect(normalizeLayers(null, 'bogus')).toEqual(['wind']);
+    expect(normalizeLayers(null, null)).toEqual(['wind']);
+    expect(normalizeLayers([], 'temp')).toEqual([]); // explicitly empty stays empty
+    expect(normalizeLayers(['rain', 'temp', 'x', 'temp'], null)).toEqual(['temp', 'rain']);
+  });
+
+  it('toggles layers and keeps drawing order', () => {
+    expect(toggleLayerId(['wind'], 'temp')).toEqual(['temp', 'wind']);
+    expect(toggleLayerId(['temp', 'wind'], 'temp')).toEqual(['wind']);
+    expect(toggleLayerId([], 'clouds')).toEqual(['clouds']);
+    expect(sortLayers(['radar', 'clouds', 'temp'])).toEqual(['temp', 'clouds', 'radar']);
+  });
+
+  it('runs particles only for wind layers, surface wind first', () => {
+    expect(particleLayer(['temp', 'rain'])).toBeUndefined();
+    expect(particleLayer(['wind500', 'gust'])!.id).toBe('gust');
+    expect(particleLayer(['wind850', 'wind500'])!.id).toBe('wind850');
+    expect(radarOnly(['radar'])).toBe(true);
+    expect(radarOnly(['radar', 'wind'])).toBe(false);
+  });
+});
