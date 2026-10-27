@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#11151c" />
+    <meta name="description" content="Wetterkarte mit Windanimation, Modellvergleich, Regenradar, Wellen und Spots." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Windblick" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <title>Windblick</title>
+  </head>
+  <body>
+    <div id="map" aria-label="Wetterkarte"></div>
+
+    <header class="topbar">
+      <div class="search" role="search">
+        <input id="search-input" type="search" placeholder="Ort oder Koordinaten suchen" autocomplete="off" enterkeyhint="search" aria-label="Ort suchen" />
+        <ul id="search-results" class="search-results" role="listbox"></ul>
+      </div>
+      <button id="btn-locate" class="icon-btn" title="Mein Standort" aria-label="Mein Standort">◎</button>
+      <button id="btn-places" class="icon-btn" title="Meine Orte und Spots" aria-label="Meine Orte und Spots">★</button>
+      <button id="btn-settings" class="icon-btn" title="Einstellungen" aria-label="Einstellungen">⚙︎</button>
+    </header>
+
+    <nav id="layer-menu" class="layer-menu" aria-label="Kartenebenen"></nav>
+
+    <div id="loading" class="loading" aria-live="polite" hidden><span class="spinner"></span><span>Lade Daten…</span></div>
+    <div id="banner" class="banner" role="alert" hidden></div>
+
+    <footer class="bottom">
+      <div class="bottom-row">
+        <div class="model-picker">
+          <button id="btn-model" class="chip" aria-haspopup="listbox" aria-expanded="false"></button>
+          <ul id="model-menu" class="model-menu" role="listbox" hidden></ul>
+        </div>
+        <div id="legend" class="legend"></div>
+      </div>
+      <div id="timeline" class="timeline"></div>
+    </footer>
+
+    <section id="sheet" class="sheet" aria-hidden="true" aria-label="Vorhersage"></section>
+    <section id="panel-places" class="panel" aria-hidden="true" aria-label="Meine Orte"></section>
+    <section id="panel-settings" class="panel" aria-hidden="true" aria-label="Einstellungen"></section>
+    <section id="panel-spot" class="panel" aria-hidden="true" aria-label="Spot bearbeiten"></section>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

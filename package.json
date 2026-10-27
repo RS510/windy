@@ -1,0 +1,26 @@
+{
+  "name": "windblick",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Wetterkarte mit Windanimation, Vorhersagen und Spots (PWA)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/leaflet": "1.9",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  }
+}
