@@ -1,9 +1,11 @@
 import './styles.css';
+import { safe } from './errors';
 import L from 'leaflet';
 import { createMap, worldZoom } from './map/mapView';
 import { FieldLayer, type FieldData } from './map/fieldLayer';
 import { ParticleLayer } from './map/particleLayer';
 import { RadarLayer } from './map/radarLayer';
+import { BordersLayer } from './map/borders';
 import { state, subscribe, update, currentTime } from './state';
 import { getLayer, particleLayer, radarOnly } from './layers/definitions';
 import { loadGrid, timeIndexFor } from './data/store';
@@ -29,6 +31,7 @@ const map = createMap($('#map'), view.c, view.z);
 const field = new FieldLayer(map);
 const particles = new ParticleLayer(map);
 const radar = new RadarLayer(map);
+const borders = safe('Ländergrenzen', () => new BordersLayer(map));
 particles.setEnabled(state.particles);
 
 type GridSource = 'base' | 'upper' | 'marine' | 'air';
@@ -316,25 +319,32 @@ function updateSpotMarkers(): void {
 
 // ---------- UI wiring ----------
 
-const layerMenu = initLayerMenu();
-initLegend();
-initModelPicker();
-initTimeline();
+const layerMenu = safe('Ebenen', initLayerMenu, { collapse: () => {} });
+safe('Legende', initLegend);
+safe('Modellwahl', initModelPicker);
+safe('Zeitleiste', initTimeline);
 
-const places = initPlacesPanel((loc, spot) => {
-  map.flyTo([loc.lat, loc.lon], Math.max(map.getZoom(), 8));
-  sheet.open(loc, spot ? 'spot' : 'forecast');
-});
-const settings = initSettingsPanel();
+const places = safe(
+  'Meine Orte',
+  () =>
+    initPlacesPanel((loc, spot) => {
+      map.flyTo([loc.lat, loc.lon], Math.max(map.getZoom(), 8));
+      sheet.open(loc, spot ? 'spot' : 'forecast');
+    }),
+  { open: () => {} },
+);
+const settings = safe('Einstellungen', initSettingsPanel, { open: () => {} });
 $('#btn-places').addEventListener('click', () => places.open());
 $('#btn-settings').addEventListener('click', () => settings.open());
 
 // Search only moves the map and shows the small popup; the forecast opens from there.
-initSearch((p) => {
-  sheet.close();
-  map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 9), { duration: 1.2 });
-  map.once('moveend', () => openPopup(L.latLng(p.lat, p.lon), p.name));
-});
+safe('Suche', () =>
+  initSearch((p) => {
+    sheet.close();
+    map.flyTo([p.lat, p.lon], Math.max(map.getZoom(), 9), { duration: 1.2 });
+    map.once('moveend', () => openPopup(L.latLng(p.lat, p.lon), p.name));
+  }),
+);
 
 $('#btn-locate').addEventListener('click', () => {
   if (!('geolocation' in navigator)) return showBanner('Standortbestimmung wird von diesem Gerät nicht unterstützt.');
@@ -394,11 +404,19 @@ if (!navigator.onLine) showBanner('Keine Internetverbindung. Angezeigt werden zu
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {
       /* offline support unavailable */
+    });
+    // When an updated version takes over, reload once so the new code runs.
+    let reloaded = false;
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true;
+      window.location.reload();
     });
   });
 }
 
 // Small debug/test hook (read-only use).
-(window as any).__windblick = { map, state, particles };
+(window as any).__windblick = { map, state, particles, borders };

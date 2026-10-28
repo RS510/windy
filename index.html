@@ -48,6 +48,25 @@
     <section id="panel-settings" class="panel" aria-hidden="true" aria-label="Einstellungen"></section>
     <section id="panel-spot" class="panel" aria-hidden="true" aria-label="Spot bearbeiten"></section>
 
+    <script>
+      // Fallback for errors that happen before the app's own error display is ready
+      // (e.g. a browser that cannot run the app code at all).
+      (function () {
+        function show(msg) {
+          var b = document.getElementById('banner');
+          if (!b || window.__windblick) return;
+          b.hidden = false;
+          b.setAttribute('data-testid', 'boot-error');
+          b.textContent = msg;
+        }
+        window.addEventListener('error', function (e) {
+          show('Die App konnte nicht starten: ' + (e.message || 'Skriptfehler') + '. Bitte einen Screenshot an den Entwickler schicken.');
+        });
+        setTimeout(function () {
+          show('Die App startet nicht. Bitte Safari aktualisieren oder die Seite neu laden. Wenn das nicht hilft, einen Screenshot schicken.');
+        }, 12000);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

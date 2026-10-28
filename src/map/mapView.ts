@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 export const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+export const FALLBACK_TILE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
 export const LABELS_URL = 'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png';
 
 /**
@@ -32,12 +33,30 @@ export function createMap(el: HTMLElement, center: [number, number], zoom: numbe
 
   // Layer order, bottom to top: base map (land, coastlines, borders) → weather colours
   // (semi-transparent, pane 250) → radar (260) → isobars (380) → place names (400) → particles.
-  L.tileLayer(TILE_URL, {
+  const base = L.tileLayer(TILE_URL, {
     subdomains: 'abcd',
     maxZoom: 19,
+    className: 'base-tiles',
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> | Wetter: <a href="https://open-meteo.com/">Open-Meteo</a>',
   }).addTo(map);
+
+  // If the primary tile server keeps failing (blocked, down), switch to a second provider.
+  let failures = 0;
+  let loaded = 0;
+  base.on('tileload', () => loaded++);
+  base.on('tileerror', () => {
+    failures++;
+    if (failures >= 4 && loaded === 0 && map.hasLayer(base)) {
+      base.remove();
+      L.tileLayer(FALLBACK_TILE_URL, {
+        maxZoom: 19,
+        maxNativeZoom: 16,
+        className: 'base-tiles fallback-tiles',
+        attribution: 'Karte: &copy; Esri | Wetter: <a href="https://open-meteo.com/">Open-Meteo</a>',
+      }).addTo(map);
+    }
+  });
 
   const radarPane = map.createPane('radar');
   radarPane.style.zIndex = '260';

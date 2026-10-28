@@ -9,6 +9,8 @@ export interface MockOptions {
   failGeocoding?: boolean;
   /** Start like a first-time user (no stored map view). */
   freshView?: boolean;
+  /** Simulate a failing primary tile server (CARTO). */
+  failTiles?: boolean;
   /** Collected request URLs for assertions. */
   requests?: string[];
 }
@@ -240,8 +242,12 @@ export async function installMocks(target: Page | BrowserContext, opts: MockOpti
     log(route.request().url());
     return route.fulfill({ status: 200, contentType: 'image/png', body: RADAR_TILE, headers: { 'access-control-allow-origin': '*' } });
   });
+  await target.route(/^https:\/\/server\.arcgisonline\.com\//, (route) => {
+    log(route.request().url());
+    return route.fulfill({ status: 200, contentType: 'image/png', body: BASE_TILE, headers: { 'access-control-allow-origin': '*' } });
+  });
   await target.route(/^https:\/\/[a-d]\.basemaps\.cartocdn\.com\//, (route) =>
-    route.fulfill({
+    opts.failTiles ? route.abort('connectionrefused') : route.fulfill({
       status: 200,
       contentType: 'image/png',
       body: route.request().url().includes('only_labels') ? LABEL_TILE : BASE_TILE,

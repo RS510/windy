@@ -3,6 +3,7 @@ import { state, subscribe, update, uid, type Favorite } from '../state';
 import { COMPASS_POINTS, WIND_UNIT_LABEL, convertWind, formatValue, windToMs, type UnitSettings, type WindUnit } from '../util/units';
 import { SPORT_DEFAULTS, SPORT_LABEL, type Sport, type Spot } from '../util/spotRating';
 import type { Location } from './detailSheet';
+import { APP_VERSION } from '../errors';
 
 const panels = ['#panel-places', '#panel-settings', '#panel-spot'];
 
@@ -246,6 +247,10 @@ export function initSettingsPanel(): { open: () => void } {
           { style: 'color:var(--muted)' },
           'Wetterdaten: Open-Meteo (ECMWF, NOAA GFS, DWD ICON, Météo-France), Wellen: Open-Meteo Marine, Luftqualität: CAMS über Open-Meteo, Radar: RainViewer, Karte: OpenStreetMap / CARTO. Kostenlose Nutzung nur privat und nicht kommerziell. Alle Angaben ohne Gewähr.',
         ),
+        h('p', { style: 'color:var(--muted)', 'data-testid': 'app-version' }, `Version ${APP_VERSION}`),
+        h('div', { class: 'section-title' }, 'Probleme?'),
+        h('p', { style: 'color:var(--muted)' }, 'Lädt die App nicht richtig, setzt dieser Knopf sie zurück: gespeicherte Daten, Favoriten, Spots und zwischengespeicherte Dateien werden gelöscht, danach lädt die neueste Version.'),
+        h('button', { type: 'button', class: 'btn danger', 'data-testid': 'app-reset', onclick: () => resetApp() }, 'App zurücksetzen'),
       ),
     );
   };
@@ -259,4 +264,21 @@ export function initSettingsPanel(): { open: () => void } {
       setOpen(el, true);
     },
   };
+}
+
+/** Removes stored data, caches and the service worker, then loads the newest version. */
+export async function resetApp(): Promise<void> {
+  if (!window.confirm('App wirklich zurücksetzen? Favoriten und Spots werden gelöscht.')) return;
+  try {
+    localStorage.clear();
+  } catch {
+    /* ignore */
+  }
+  try {
+    if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+    if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+  } catch {
+    /* ignore, reload anyway */
+  }
+  window.location.reload();
 }

@@ -136,3 +136,39 @@ describe('active layers', () => {
     expect(radarOnly(['radar', 'wind'])).toBe(false);
   });
 });
+
+import { splitAtDateLine } from '../../src/map/lines';
+
+describe('border lines', () => {
+  it('splits lines that jump across the date line', () => {
+    const r = splitAtDateLine({
+      type: 'MultiLineString',
+      coordinates: [
+        [
+          [170, 60],
+          [179.9, 61],
+          [-179.9, 61],
+          [-170, 62],
+        ],
+        [
+          [0, 0],
+          [1, 1],
+        ],
+      ],
+    });
+    expect(r.coordinates).toEqual([
+      [
+        [170, 60],
+        [179.9, 61],
+      ],
+      [
+        [-179.9, 61],
+        [-170, 62],
+      ],
+      [
+        [0, 0],
+        [1, 1],
+      ],
+    ]);
+  });
+});

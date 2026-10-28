@@ -30,7 +30,7 @@ export class FieldLayer {
     this.vc = new ViewportCanvas(map, 'field', 250, 'field-canvas');
     this.vc.canvas.dataset.testid = 'field-canvas';
     // Let the base map (coastlines, borders) shine through the colours.
-    this.vc.canvas.style.opacity = '0.62';
+    this.vc.canvas.style.opacity = '0.55';
     this.iso = new ViewportCanvas(map, 'isolines', 380, 'iso-canvas');
     this.iso.canvas.dataset.testid = 'iso-canvas';
   }

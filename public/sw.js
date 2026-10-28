@@ -1,6 +1,6 @@
 // Offline support: app shell is cached; weather data uses network first with cache fallback;
 // map tiles use cache first with a size limit.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = `shell-${VERSION}`;
 const DATA = `data-${VERSION}`;
 const TILES = `tiles-${VERSION}`;
@@ -70,11 +70,13 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.hostname.endsWith('open-meteo.com') || url.hostname === 'api.rainviewer.com') {
     event.respondWith(networkFirst(req, DATA, MAX_DATA));
-  } else if (url.hostname.endsWith('basemaps.cartocdn.com') || url.hostname.endsWith('rainviewer.com')) {
+  } else if (url.hostname.endsWith('basemaps.cartocdn.com') || url.hostname.endsWith('rainviewer.com') || url.hostname === 'server.arcgisonline.com') {
     event.respondWith(cacheFirst(req, TILES, MAX_TILES));
   } else if (url.origin === self.location.origin) {
     if (req.mode === 'navigate') {
-      event.respondWith(networkFirst(req, SHELL, 50).catch(() => caches.match('./index.html')));
+      // Always ask the server for the newest page (bypassing the HTTP cache) so an update
+      // is picked up right away; offline the cached copy is used.
+      event.respondWith(networkFirst(new Request(req.url, { cache: 'no-store' }), SHELL, 50).catch(() => caches.match('./index.html')));
     } else {
       event.respondWith(staleWhileRevalidate(req));
     }
